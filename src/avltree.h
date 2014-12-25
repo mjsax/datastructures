@@ -99,7 +99,9 @@ namespace datastructures {
 				typedef _avlnode<T>				avlnode;
 
 				const avlnode * node;
-				const avlnode * lastVisited;
+				const avlnode * lastVisitedForward;
+				const avlnode * lastVisitedBackward;
+
 			public:
 
 				typedef std::bidirectional_iterator_tag		iterator_category;
@@ -107,15 +109,17 @@ namespace datastructures {
 				/*
 				 * TODO
 				 */
-				avltree_const_iterator() : node(NULL), lastVisited(NULL) { /* empty */ };
+				avltree_const_iterator() : node(NULL), lastVisitedForward(NULL), lastVisitedBackward(NULL) { /* empty */ }
 				/*
 				 * TODO
 				 */
-				avltree_const_iterator(const avlnode * n, const avlnode * l) : node(n), lastVisited(l) { /* empty */ };
+				avltree_const_iterator(const avlnode * n, const avlnode * lf, const avlnode * lb) :
+					node(n), lastVisitedForward(lf), lastVisitedBackward(lb) { /* empty */ }
 				/*
 				 * TODO
 				 */
-				avltree_const_iterator(const avltree_const_iterator & it) : node(it.node), lastVisited(it.lastVisited) { /* empty */ };
+				avltree_const_iterator(const avltree_const_iterator & it) : node(it.node),
+						lastVisitedForward(it.lastVisitedForward), lastVisitedBackward(it.lastVisitedBackward) { /* empty */ }
 
 
 
@@ -143,27 +147,30 @@ namespace datastructures {
 				avltree_const_iterator<T> & operator++() {
 					while(true) {
 						// if coming from top, step down to the very left, to get smallest value from subtree
-						if(lastVisited == node->parent && node->child[0] != NULL) {
-							lastVisited = node;
+						if(lastVisitedForward == node->parent && node->child[0] != NULL) {
+							lastVisitedForward = node;
 							node = node->child[0];
 							if(node->child[0] == NULL) { // smallest ancestor found, stop iterating
+								lastVisitedBackward = node->child[1] != NULL ? node->child[1] : node->parent;
 								break;
 							}
 						} else { // no left child after going down or currently moving up
-							// step down to root right subtree, if not coming from it
-							if(node->child[1] != NULL && lastVisited != node->child[1]) {
-								lastVisited = node;
+							// step down to right subtree, if not coming from it
+							if(node->child[1] != NULL && lastVisitedForward != node->child[1]) {
+								lastVisitedForward = node;
 								node = node->child[1];
 								if(node ->child[0] == NULL) {
 									// if there is no left subtree, current node is next
 									// otherwise, next node is smallest from subtree with current node as subtree root
+									lastVisitedBackward = node->child[1] != NULL ? node->child[1] : node->parent;
 									break;
 								}
 							} else { // all children visited; step up
-								lastVisited = node;
+								lastVisitedForward = node;
 								if(_getIndex(node) == 0) {
 									// if stepping up from left child, current node is next, stop iterating
 									node = node->parent;
+									lastVisitedBackward = node->child[1] != NULL ? node->child[1] : node->parent;
 									break;
 								} else {
 									node = node->parent;
@@ -192,7 +199,39 @@ namespace datastructures {
 				 * Complexity: log(n)
 				 */
 				avltree_const_iterator<T> & operator--() {
-					assert(false);
+					while(true) {
+						// if coming from top, step down to the very right, to get largest value from subtree
+						if(lastVisitedBackward == node->parent && node->child[1] != NULL) {
+							lastVisitedBackward = node;
+							node = node->child[1];
+							if(node->child[1] == NULL) { // largest ancestor found, stop iterating
+								lastVisitedForward = node->child[0] != NULL ? node->child[0] : node->parent;
+								break;
+							}
+						} else { // no right child after going down or currently moving up
+							// step down to left subtree, if not coming from it
+							if(node->child[0] != NULL && lastVisitedBackward != node->child[0]) {
+								lastVisitedBackward = node;
+								node = node->child[0];
+								if(node ->child[1] == NULL) {
+									// if there is no right subtree, current node is next
+									// otherwise, next node is largest from subtree with current node as subtree root
+									lastVisitedForward = node->child[0] != NULL ? node->child[0] : node->parent;
+									break;
+								}
+							} else { // all children visited; step up
+								lastVisitedBackward = node;
+								if(_getIndex(node) == 1) {
+									// if stepping up from right child, current node is next, stop iterating
+									node = node->parent;
+									lastVisitedForward = node->child[0] != NULL ? node->child[0] : node->parent;
+									break;
+								} else {
+									node = node->parent;
+								}
+							}
+						}
+					}
 
 					return *this;
 				}
@@ -918,7 +957,7 @@ namespace datastructures {
 				const_iterator cbegin() const throw() {
 					const avlnode * min = findLimitAncestor(root, 0);
 
-					return min != NULL ? const_iterator(min, min->parent) : const_iterator();
+					return min != NULL ? const_iterator(min, min->parent, min->child[1] != NULL ? min->child[1] : min->parent) : const_iterator();
 				}
 
 				/*
@@ -926,31 +965,26 @@ namespace datastructures {
 				 */
 				const_iterator cend() const throw() {
 					const avlnode * max = findLimitAncestor(root, 1);
-					if(max != NULL) {
-						if(max->child[1] != NULL) {
-							return const_iterator(max, max->child[1]);
-						}
-						if(max->child[0] != NULL) {
-							return const_iterator(max, max->child[0]);
-						}
-						return const_iterator(max, max->parent);
-					}
-					return const_iterator();
+
+					return max != NULL ? const_iterator(max, max->child[0] != NULL ? max->child[0] : max->parent, max->parent) : const_iterator();
 				}
 
 				/*
 				 * TODO
 				 */
 				const_iterator crbegin() const throw() {
-					const avlnode * max = findLimitAncestor(root, 1);
-					return max != NULL ? const_iterator(max, NULL) : const_iterator();
+					assert(false);
+
+					return NULL;
 				}
 
 				/*
 				 * TODO
 				 */
 				const_iterator crend() const throw() {
-					return cbegin();
+					assert(false);
+
+					return NULL;
 				}
 
 		};
