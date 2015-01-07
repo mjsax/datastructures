@@ -1,0 +1,3 @@
+To generate Doxygen documenation run 'doxygen ../Doxyfile' in folder 'src'. The generated documenation covers all information needed to use the library.
+
+Additionally, extensive comments can be found within the source code files.
