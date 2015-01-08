@@ -22,44 +22,67 @@
 #include <stddef.h>
 #include <limits.h>
 #include <exception>
-#include <iterator>
 #include <cassert>
 
+/**
+ * \brief The top-level namespace of the whole project
+ */
 namespace datastructures {
+	/**
+	 * \brief The namespace of the AVL-Tree.
+	 */
 	namespace avltree {
+		/**
+		 * \brief This exception is thrown if a requested element cannot be found in the tree.
+		 */
 		class AvltreeException : public std::exception {
 			public:
 				virtual ~AvltreeException() throw() { /* empty */};
 				virtual const char * what() const throw() { return "Value not found."; };
 		};
 
+		///
+		/// \cond
+		///
 		/*
-		 * The node within the AVL-tree. Contains a value and has a pointer to its left and right child as well as to its parent.
+		 * The base node within the AVL-tree. Contains a pointer to its parent, left and right child, as well as left and right sibling.
 		 * The balance factor indicates if left or right sub-tree is deeper.
 		 */
-		template<class T>
-		struct _avlnode {
-			const T value;
-			_avlnode<T> * child[2]; // index 0 is left child; index 1 is right child
-			_avlnode<T> * parent;
+		struct _avlbasenode {
+			_avlbasenode * parent;
+			_avlbasenode * child[2]; // index 0 is left child; index 1 is right child
+
+			_avlbasenode * prev;
+			_avlbasenode * next;
+
 			char balanceFactor; // valid values are:
 								//	-> -1, if left subtree is deeper then right subtree
 								//	-> 0, if both subtrees are equally deep
 								//	-> 1, if right subtree is deeper than left subtree
 
-			_avlnode(_avlnode<T> * const next) throw() : value(NULL), parent(NULL), balanceFactor(0) {
-				child[0] = next;
-				child[1] = NULL;
-			}
-			_avlnode(const T v) throw() : value(v), parent(NULL), balanceFactor(0) {
+			/*
+			 * Creates a dummy base node. Used as before-first, after-last, and as empty node in iterators in case of empty tree.
+			 */
+			_avlbasenode() : parent(NULL), balanceFactor(0) {
 				child[0] = NULL;
 				child[1] = NULL;
+				prev = this;
+				next = this;
 			}
-			_avlnode(const T v, _avlnode<T> * p) throw() : value(v), parent(p), balanceFactor(0) {
+			/*
+			 * Creates a new node given its parent in the tree and links the new node in between two other nodes. Nodes are always created as leafs,
+			 * thus, children are always NULL.
+			 */
+			_avlbasenode(_avlbasenode * p,_avlbasenode * before, _avlbasenode * after) : parent(p), prev(before), next(after), balanceFactor(0) {
 				child[0] = NULL;
 				child[1] = NULL;
+				before->next = this;
+				after->prev = this;
 			}
-			~_avlnode() throw() {
+			/*
+			 * Frees memory of child nodes if present. Thus, all nodes of the complete subtree will automatically be freed by recursive destructor calls.
+			 */
+			virtual ~_avlbasenode() throw() {
 				if(child[0] != NULL) {
 					delete child[0];
 					child[0] = NULL;
@@ -72,324 +95,223 @@ namespace datastructures {
 		};
 
 		/*
-		 * Computes the child index of node with regard to its parent. Return 0 if node is left child of its parent and 1 if
-		 * node is right child of its parent (or parent is root). Assumes node is not NULL.
+		 * The node within the AVL-tree. Contains a value and inherits all tree-structure pointers from base node.
+		 */
+		template<class T>
+		struct _avlnode : _avlbasenode {
+			const T value;
+
+			_avlnode(const T v, _avlbasenode * before, _avlbasenode * after, _avlnode<T> * p) throw() : _avlbasenode(p, before, after), value(v) { /* empty */}
+		};
+		///
+		/// \endcond
+		///
+
+
+		/**
+		 * \brief Iterator for @ref avltree.
 		 *
-		 * Complexity: O(1)
+		 * Read-only iterator that can move forward and backward. De-referencing an iterator might result in _undefined behavior_
+		 * if iterator was retrieved from an empty tree, or is at position _before-the-first-element_ or _after-the-last-element_.
+		 * Because the internal tree structure ensures an ordered insert and retrieval, only read-only (const) iterator is supported.
 		 */
 		template<class T>
-		inline int _getIndex(const _avlnode<T> * const node) throw() {
-			assert(node != NULL);
-			const _avlnode<T> * const parent = node->parent;
-			// -> parent might be root: in this case, index has no useful value because there is not parent
-			//		(left hand side of || for computing index; ensures that right hand side is not evaluated if parent==NULL
-			//		 to avoid null pointer access; returned index=1)
-			// -> otherwise:
-			// 		parent->left == node -> index = 0
-			// 		parent->right == node -> index = 1
-			//		(right hand side of || for computing index:
-			//		 -> parent->child[1] == node evaluates to true => index=1
-			//		 -> parent->child[1] == node evaluates to false => index=0)
-			return parent == NULL || parent->child[1] == node;
-		}
-
-
-		/*
-		 * Iterator for avltree. Read-only iterator that can move forward and backward.
-		 */
-		template<class T>
-		class _avltree_const_iterator : public std::iterator<std::bidirectional_iterator_tag, T> {
+		class _avltree_const_iterator {
 			private:
-				typedef _avlnode<T>				avlnode;
+				typedef _avltree_const_iterator				self;
+				typedef const _avltree_const_iterator		cself;
+				typedef _avltree_const_iterator &			selfref;
+				typedef const _avltree_const_iterator &		cselfref;
 
-				const avlnode * node;
-				const avlnode * lastVisited[2]; // index 0 for forward; index 1 for backward
+				typedef _avlnode<T>							avlnode;
 
-				//avlnode limits[2]; // index 0 is cbefore_begin; index 1 is cafter_end
+				_avlbasenode empty; // dummy node that is used for iterator on empty tree
+				const _avlbasenode * node; // the current element the iterator is pointing to
 
 			public:
 				typedef std::bidirectional_iterator_tag		iterator_category;
+				typedef T									value_type;
+				typedef const T *							pointer;
+				typedef const T &							reference;
 
-				/*
-				 * Constructs an empty iterator (non-movable and non-readable).
-				 */
-				_avltree_const_iterator() : node(NULL) {
-					lastVisited[0] = NULL;
-					lastVisited[1] = NULL;
-				}
-				/*
-				 * Constructs an iterator that points before (before==true) or after (before==false)
-				 * the given node.
-				 */
-				_avltree_const_iterator(const avlnode * n, bool before) : node(NULL) {
-					if(before) {
-						lastVisited[0] = NULL;
-						lastVisited[1] = n;
-					} else {
-						lastVisited[0] = n;
-						lastVisited[1] = NULL;
-					}
-				}
-				/*
-				 * Constructs an iterator that points to node n.
-				 */
-				_avltree_const_iterator(const avlnode * n) : node(n) {
-					lastVisited[0] = n->child[0] != NULL ? n->child[0] : n->parent;
-					lastVisited[1] = n->child[1] != NULL ? n->child[1] : n->parent;
-				}
-				/*
-				 * Copy-Constructor.
-				 */
-				_avltree_const_iterator(const _avltree_const_iterator & it) : node(it.node) {
-					lastVisited[0] = it.lastVisited[0];
-					lastVisited[1] = it.lastVisited[1];
-				}
-
-
-
-
-
-				const T & operator*() const {
-					return node->value;
-				}
-
-				const T * operator->() const {
-					return &node->value;
-				}
-
-			private:
-				/*
-				 * Moved the iterator one step forward (index==1) or backward (index==0).
-				 */
-				void step(const int index) {
-					assert(index == 0 || index == 1);
-
-					const int reverseIndex = 1 - index;
-
-					/*if(node == &limits[index]) {
-						return;
-					}
-
-					if(node == &limits[reverseIndex]) {
-						node = limits[0].child[0];
-						lastVisited[reverseIndex] == NULL;
-					}*/
-
-					while(true) {
-						// if coming from top:
-						//  -> forward: step down to the very left, to get smallest value from subtree
-						//  -> backward: step down to the very right, to get largest value from subtree
-						if(lastVisited[reverseIndex] == node->parent && node->child[reverseIndex] != NULL) {
-							lastVisited[reverseIndex] = node;
-							node = node->child[reverseIndex];
-							if(node->child[reverseIndex] == NULL) { // smallest ancestor found, stop iterating
-								lastVisited[index] = node->child[index] != NULL ? node->child[index] : node->parent;
-								break;
-							}
-						} else { // no left/right child after going down or currently moving up
-							// step down to right/left subtree, if not coming from it
-							if(node->child[index] != NULL && lastVisited[reverseIndex] != node->child[index]) {
-								lastVisited[reverseIndex] = node;
-								node = node->child[index];
-								if(node ->child[reverseIndex] == NULL) {
-									// if there is no left/right subtree, current node is next
-									// otherwise, next node is smallest/largest from subtree with current node as subtree root
-									lastVisited[index] = node->child[index] != NULL ? node->child[index] : node->parent;
-									break;
-								}
-							} else { // all children visited; step up
-								if(node->parent != NULL) {
-									lastVisited[reverseIndex] = node;
-									if(_getIndex(node) == reverseIndex) {
-										// if stepping up from left/right child, current node is next, stop iterating
-										node = node->parent;
-										lastVisited[index] = node->child[index] != NULL ? node->child[index] : node->parent;
-										break;
-									} else {
-										node = node->parent;
-									}
-								} else {
-									//node = &limits[0];
-									break;
-								}
-							}
-						}
-					}
-				}
-
-			public:
-				/*
-				 * Moves the iterator to the next position in forward direction and returns an iterator
-				 * pointing to the new position.
+				/**
+				 * \brief Constructs an empty iterator.
 				 *
-				 * Complexity: O(log(n)) with n being the current number of values contained in the avltree
-				 * the iterator is operating on.
+				 * An empty iterator is non-movable and non-readable.
 				 */
-				_avltree_const_iterator<T> & operator++() {
-					step(1); // forward direction
+				_avltree_const_iterator() : node(&empty) {  }
+				/**
+				 * \brief Constructs an iterator that points to node n.
+				 */
+				_avltree_const_iterator(const _avlbasenode * n) : node(n) { /* empty */ }
+				/**
+				 * \brief Copy-Constructor.
+				 */
+				_avltree_const_iterator(cselfref it) : node(it.node) { /* empty */ }
+				/**
+				 * \brief Copy-Assignment operator.
+				 */
+				selfref operator=(cselfref it) {
+					this->node = it.node;
 					return *this;
 				}
 
-				/*
-				 * Moves the iterator to the next position in forward direction and returns an iterator
-				 * pointing to the original position.
+
+
+
+
+				/**
+				 * \brief Returns the value of the element of the current iterator position.
 				 *
-				 * Complexity: O(log(n)) with n being the current number of values contained in the avltree
-				 * the iterator is operating on.
+				 * Must not be called if iterator is at position _before-the-first-element_ or _after-the-last-element_.
+				 * Furthermore, it must not be called if the iterator was retrieved from an empty tree.
 				 */
-				_avltree_const_iterator<T> operator++(int) {
-					_avltree_const_iterator it(*this);
-					step(1); // forward direction
-					return it;
+				reference operator*() const {
+					return static_cast<const avlnode * const>(node)->value;
 				}
 
-				/*
-				 * Moves the iterator to the next position in backward direction and returns an iterator
+				/**
+				 * \brief Returns the value of the element of the current iterator position.
+				 *
+				 * Must not be called if iterator is at position _before-the-first-element_ or _after-the-last-element_.
+				 * Furthermore, it must not be called if the iterator was retrieved from an empty tree.
+				 */
+				pointer operator->() const {
+					return &static_cast<const avlnode * const>(node)->value;
+				}
+
+				/**
+				 * \brief Moves the iterator to the next position in forward direction and returns an iterator
 				 * pointing to the new position.
 				 *
-				 * Complexity: O(log(n)) with n being the current number of values contained in the avltree
-				 * the iterator is operating on.
+				 * If iterator is at the position _after-the-last-element_ it remains at this position.
+				 *
+				 * Complexity: O(1)
 				 */
-				_avltree_const_iterator<T> & operator--() {
-					step(0); // backward direction
+				selfref operator++() {
+					node = node->next;
 					return *this;
 				}
 
-				/*
-				 * Moves the iterator to the next position in backward direction and returns an iterator
+				/**
+				 * \brief Moves the iterator to the next position in forward direction and returns an iterator
 				 * pointing to the original position.
 				 *
-				 * Complexity: O(log(n)) with n being the current number of values contained in the avltree
-				 * the iterator is operating on.
+				 * If iterator is at the position _after-the-last-element_ it remains at this position.
+
+				 * Complexity: O(1)
 				 */
-				_avltree_const_iterator<T> operator--(int) {
+				self operator++(int) {
 					_avltree_const_iterator it(*this);
-					step(0); // backward direction
+					node = node->next;
 					return it;
 				}
 
-				/*
-				 * Returns true if both iterators operate on the same avltree and point to the same
-				 * position. Otherwise, false is returned.
+				/**
+				 * \brief Moves the iterator to the next position in backward direction and returns an iterator
+				 * pointing to the new position.
+				 *
+				 * If iterator is at the position _before-the-first-element_ it remains at this position.
+				 *
+				 * Complexity: O(1)
 				 */
-				bool operator==(const _avltree_const_iterator<T> & it) const {
-					return node == it.node && lastVisited[0] == it.lastVisited[0] && lastVisited[1] == it.lastVisited[1];
+				selfref operator--() {
+					node = node->prev;
+					return *this;
 				}
 
-				/*
-				 * Returns true if both iterators operate on different avltrees or point to different
-				 * position within the same avltree. Otherwise, false is returned.
+				/**
+				 * \brief Moves the iterator to the next position in backward direction and returns an iterator
+				 * pointing to the original position.
+				 *
+				 * If iterator is at the position _before-the-first-element_ it remains at this position.
+				 *
+				 * Complexity: O(1)
 				 */
-				bool operator!=(const _avltree_const_iterator<T> & it) const {
-					return !(*this == it);
+				self operator--(int) {
+					_avltree_const_iterator it(*this);
+					node = node->prev;
+					return it;
+				}
+
+				/**
+				 * \brief Equality operator.
+				 *
+				 * Returns `true` if both iterators operate on the same @ref avltree and point to the same
+				 * position. Otherwise, `false` is returned.
+				 */
+				bool operator==(cselfref it) const {
+					return node == it.node;
+				}
+
+				/**
+				 * \brief Inequality operator.
+				 *
+				 * Returns `true` if both iterators operate on different @ref avltree or point to different
+				 * position within the same @ref avltree. Otherwise, `false` is returned.
+				 */
+				bool operator!=(cselfref it) const {
+					return node != it.node;
 				}
 		};
 
-
-		/*
-		 * AVL tree container. An AVL tree (named after its inventors, Georgy Adelson-Velsky and Landis') is a sorted, balanced, binary tree.
+		/**
+		 * \brief Base class for @ref avltree.
 		 *
-		 * avltree requires a total order on the value's type T (specified by "<") and cannot store duplicates. By default, std::less<T> is used
-		 * to insert values at the correct position in the tree. If T is a user-defined type/class, it must provide an implementation of
-		 * less-than operator: bool operator<(const T &) const
-		 *
-		 * If pointer types are used, a user-defined comparator C should be provided. Otherwise, values are ordered by their memory addresses.
-		 * Furthermore, inserted values must not be modified after inserting. Otherwise, internal tree structure might get invalid. Thus, no
-		 * guarantees about tree behavior can be given if values inserted by pointer or reference are modified after insertion.
-		 *
-		 * A user-defined comparator must provide an implementation of the function call operator that returns true if first parameter is less
-		 * than second parameter and false otherwise: bool operator()(const T, const T) const
-		 *
-		 * Additionally, a key type K can be provided (that is equal to value type by default) that enables key-based find and remove operation.
-		 * If a key type is used, a user-defined comparator must be specified that provides three function call operators:
-		 *   (1) bool operator()(const T, const T) const;
-		 *   (2) bool operator()(const K, const T) const;
-		 *   (3) bool operator()(const T, const K) const;
-		 * The user-defined comparator must ensure, that all three function call operators return true if the first parameter is less than the
-		 * second parameter. Additionally, it must be ensured that for any two used value/key pairs V1/K1 and V2/K2 it must hold that
-		 * V1 < V2 <=> K1 < V2 <=> V1 < K2.
+		 * Contains all value type parameter independent functions.
 		 */
-
-		// TODO: make STL container conform... see http://www.cplusplus.com/reference/stl/
-		// TODO: make C++ 11 or C++14 compatible
-
-		template<class T, class C = std::less<T>, class K = T>
-		class avltree {
-			public:
-				typedef _avltree_const_iterator<T>				const_iterator;
-				typedef std::reverse_iterator<const_iterator>	const_reverse_iterator;
-
-
-			private:
-				typedef _avlnode<T>				avlnode;
-
-				avlnode * root;
+		class avltree_base {
+			protected:
+				///
+				/// \cond
+				///
+				_avlbasenode * root;
+				_avlbasenode beforeFirst;
+				_avlbasenode afterLast;
 				size_t currentSize;
-				C less_than;
 
-				template<class T1, class T2>
-				inline bool equals(const T1 v1, const T2 v2) const {
-					return !(less_than(v1, v2)
-							|| less_than(v2, v1));
+				_avlbasenode emptyTreeNode; // dummy node that is used for iterator on empty tree
+				///
+				/// \endcond
+				///
+
+				/**
+				 * \brief Creates an empty tree.
+				 */
+				avltree_base() : root(NULL), currentSize(0) {
+					beforeFirst.next = &afterLast;
+					afterLast.prev = &beforeFirst;
+				}
+				/**
+				 * \brief Frees all internal nodes allocated by the tree.
+				 */
+				virtual ~avltree_base() {
+					if(root != NULL)
+						delete root;
 				}
 
+				///
+				/// \cond
+				///
 				/*
-				 * Searches for a given value starting at the root. Assumes root is not NULL. Returns founded node or last
-				 * visited(!) leaf. Hence, returned node can or cannot contain value---depending if value is stored in tree
-				 * or not.
+				 * Computes the child index of node with regard to its parent. Return 0 if node is left child of its parent and 1 if
+				 * node is right child of its parent (or parent is root). Assumes node is not NULL.
 				 *
-				 * Complexity: O(log(n)) with n being the current number of values contained in the tree.
+				 * Complexity: O(1)
 				 */
-				template<class KT>
-				avlnode * findNode(const KT key) const {
-					assert(root != NULL);
-
-					const avlnode * node = root;
-
-					while(true) {
-						if(equals(key, node->value)) {
-							break;
-						}
-
-						if(less_than(key, node->value)) {
-							if(node->child[0] == NULL) {
-								break;
-							} else {
-								node = node->child[0];
-								continue;
-							}
-						}
-
-						assert(less_than(node->value, key));
-						if(node->child[1] == NULL) {
-							break;
-						} else {
-							node = node->child[1];
-							continue;
-						}
-					}
-
-					return const_cast<avlnode *>(node);
-				}
-
-				/*
-				 * Template function to cover search by value and search by key. Searches for a given value starting at the root.
-				 * Returns value if present. Otherwise, an AvltreeException is thrown.
-				 *
-				 * Complexity: O(log(n)) with n being the current number of values contained in the tree.
-				 */
-				template<class KT>
-				inline T findInternal(const KT key) const throw(AvltreeException) {
-					if(root != NULL) {
-						const avlnode * const node = findNode(key);
-						assert(node != NULL);
-
-						if(equals(key, node->value)) {
-							return node->value;
-						}
-					}
-
-					throw AvltreeException();
+				inline int _getIndex(const _avlbasenode * const node) throw() {
+					assert(node != NULL);
+					const _avlbasenode * const parent = node->parent;
+					// -> parent might be root: in this case, index has no useful value because there is not parent
+					//		(left hand side of || for computing index; ensures that right hand side is not evaluated if parent==NULL
+					//		 to avoid null pointer access; returned index=1)
+					// -> otherwise:
+					// 		parent->left == node -> index = 0
+					// 		parent->right == node -> index = 1
+					//		(right hand side of || for computing index:
+					//		 -> parent->child[1] == node evaluates to true => index=1
+					//		 -> parent->child[1] == node evaluates to false => index=0)
+					return parent == NULL || parent->child[1] == node;
 				}
 
 				/*
@@ -399,7 +321,7 @@ namespace datastructures {
 				 *
 				 * Complexity: O(1)
 				 */
-				inline void replaceChildBySubtree(avlnode * const parent, const int index, avlnode * const subtree) throw() {
+				inline void replaceChildBySubtree(_avlbasenode * const parent, const int index, _avlbasenode * const subtree) throw() {
 					assert(index == 0 || index == 1);
 
 					if(parent != NULL) { // node is NOT root
@@ -421,7 +343,7 @@ namespace datastructures {
 				 *
 				 * Complexity: O(1)
 				 */
-				inline void rotateSimple(avlnode * const node, const int index) throw() {
+				inline void rotateSimple(_avlbasenode * const node, const int index) throw() {
 					assert(node != NULL);
 					assert(node->parent != NULL);
 					assert(index == 0 || index == 1);
@@ -429,7 +351,7 @@ namespace datastructures {
 					// sanity check: it not true, rotating does not make sense
 					assert(node->child[index] != NULL);
 
-					avlnode * const parent = node->parent;
+					_avlbasenode * const parent = node->parent;
 
 					// sanity check for input balance factors: computation of new balance factors is based on this assumptions
 					assert(node->balanceFactor != 0 || (index==0 && parent->balanceFactor==-1) || (index==1 && parent->balanceFactor==1));
@@ -492,14 +414,14 @@ namespace datastructures {
 				 *
 				 * Complexity: O(1)
 				 */
-				inline void rotateDouble(avlnode * const node, const int index) throw() {
+				inline void rotateDouble(_avlbasenode * const node, const int index) throw() {
 					assert(node != NULL);
 					assert(node->parent != NULL);
 					assert(node->child[1-index] != NULL);
 					assert(index == 0 || index == 1);
 
-					avlnode * const parent = node->parent;
-					avlnode * const child = node->child[1-index];
+					_avlbasenode * const parent = node->parent;
+					_avlbasenode * const child = node->child[1-index];
 
 					// double-rotate child up (ie, replace parent by child)
 					replaceChildBySubtree(parent->parent, _getIndex(parent), child);
@@ -572,7 +494,7 @@ namespace datastructures {
 				 *
 				 * Complexity: O(log(n)) with n being the current number of values contained in the tree.
 				 */
-				int balanceSubtree(const avlnode * const subtreeRoot, avlnode * node, int index, const int insertRemove) throw() {
+				int balanceSubtree(const _avlbasenode * const subtreeRoot, _avlbasenode * node, int index, const int insertRemove) throw() {
 					assert(index == 0 || index == 1);
 					assert(insertRemove == 0 || insertRemove == 1);
 
@@ -599,7 +521,7 @@ namespace datastructures {
 						}
 
 						if(bf == 2*heightChange) { // tree is not in balance -> need to rotate
-							avlnode * const child = node->child[rotate];
+							_avlbasenode * const child = node->child[rotate];
 							if(child->balanceFactor == -heightChange) {
 								// more difficult case: rotation at two different levels is necessary (including split of child subtree)
 								// starting point: [parent is on top]
@@ -645,39 +567,24 @@ namespace datastructures {
 				}
 
 				/*
-				 * Return the ancestor of a node with the smallest or largest value. If index==0, the smallest ancestor is returned.
-				 * If index==1, the largest ancestor is returned. If node is NULL, NULL is returned. If node has no children, node
-				 * is returned.
-				 *
-				 * Complexity: O(log(n)) with n being the current number of values contained in the tree.
-				 */
-				inline avlnode * findLimitAncestor(const avlnode * node, const int index) const throw() {
-					assert(index == 0 || index == 1);
-
-					if(node == NULL)
-						return NULL;
-
-					while(node->child[index] != NULL) {
-						node = node->child[index];
-					}
-
-					return const_cast<avlnode*>(node);
-				}
-
-				/*
 				 * Removes a given node from the tree. If left subtree is present, node is replaced by largest ancestor of it
 				 * to maintain tree order. Otherwise, node is simply removed. Tree re-balancing might occur.
 				 *
 				 * Complexity: O(log(n)) with n being the current number of values contained in the tree.
 				 */
-				void removeNode(const avlnode * const node) throw() {
+				void removeNode(const _avlbasenode * const node) throw() {
 					assert(node != NULL);
 
 					int index = _getIndex(node);
-					avlnode * largestAncestor = findLimitAncestor(node->child[0], 1);
+					_avlbasenode * largestAncestor;
 
-					if(largestAncestor != NULL) {
-						avlnode * const p_ancestor = largestAncestor->parent;
+					if(node->child[0] != NULL) {
+						largestAncestor = node->child[0];
+						while(largestAncestor->child[1] != NULL) {
+							largestAncestor = largestAncestor->child[1];
+						}
+
+						_avlbasenode * const p_ancestor = largestAncestor->parent;
 
 						// remove largest child from subtree
 						int heightDifferenz = 0;
@@ -718,6 +625,154 @@ namespace datastructures {
 					// balance tree upward to root starting at removed node (ie, its replacement or its parent)
 					balanceSubtree(NULL, largestAncestor, index, 1);
 				}
+			///
+			/// \endcond
+			///
+
+			public:
+				/**
+				 * \brief Removes all elements from the tree.
+				 */
+				void clear() throw() {
+					if(root != NULL) {
+						delete root;
+						root = NULL;
+						currentSize = 0;
+						beforeFirst.next = &afterLast;
+						afterLast.prev = &beforeFirst;
+					}
+				}
+
+				/**
+				 * \brief Returns `true` if the tree is empty, ie, does not contain any elements. Otherwise, `false` is returned.
+				 */
+				bool empty() const throw() {
+					return root == NULL;
+				}
+
+				/**
+				 * \brief Returns the current number of elements contained in the tree.
+				 *
+				 * The count is only correct, if the tree always contained less than `UINT_MAX` elements. If `UINT_MAX` or more elements have been contained in
+				 * the tree, size() returns `UINT_MAX` (even if the current number of elements is less than `UINT_MAX`). The count is automatically corrected,
+				 * if the tree gets empty. If this case, the count is set to zero. The count can be recomputed using recomputeSize().
+				 *
+				 * Complexity: O(1)
+				 *
+				 *  _See limits.h for UNIT_MAX._
+				 */
+				size_t size() const throw() {
+					return currentSize;
+				}
+
+		};
+
+		/**
+		 * \brief AVL tree container. An AVL tree (named after its inventors, G.M. Adelson-Velsky and J.M. Landis) is a sorted, balanced, binary tree.
+		 *
+		 * @ref avltree requires a total order on the value's type __T__ (specified by "<") and cannot store duplicates. By default, `std::less<T>` is used
+		 * to insert values at the correct position in the tree. If __T__ is a user-defined type/class, it must provide an implementation of
+		 * less-than operator: `bool operator<(const T &) const`
+		 *
+		 * If pointer types are used, a user-defined comparator __C__ should be provided. Otherwise, values are ordered by their memory addresses.
+		 * Furthermore, inserted values must not be modified after inserting. Otherwise, internal tree structure might get invalid. Thus, no
+		 * guarantees about tree behavior can be given if values inserted by pointer or reference are modified after insertion.
+		 *
+		 * A user-defined comparator must provide an implementation of the function call operator that returns true if first parameter is less
+		 * than second parameter and false otherwise: `bool operator()(const T, const T) const`
+		 *
+		 * Additionally, a key type __K__ can be provided (that is equal to value type by default) that enables key-based find and remove operation.
+		 * If a key type is used, a user-defined comparator must be specified that provides three function call operators:
+		 *   1. `bool operator()(const T, const T) const`
+		 *   2. `bool operator()(const K, const T) const`
+		 *   3. `bool operator()(const T, const K) const`
+		 *
+		 * The user-defined comparator must ensure, that all three function call operators return true if the first parameter is less than the
+		 * second parameter. Additionally, it must be ensured that for any two used value/key pairs `V1/K1` and `V2/K2` it must hold that
+		 * `V1 < V2 <=> K1 < V2 <=> V1 < K2`.
+		 */
+
+		// TODO: make STL container conform... see http://www.cplusplus.com/reference/stl/
+		// TODO: make C++ 11 or C++14 compatible
+
+		template<class T, class C = std::less<T>, class K = T>
+		class avltree : public avltree_base {
+			public:
+				typedef _avltree_const_iterator<T>				const_iterator;
+				typedef const_iterator							iterator;
+
+			///
+			/// \cond
+			///
+			protected:
+				typedef _avlnode<T>				avlnode;
+
+				C less_than;
+
+				template<class T1, class T2>
+				inline bool equals(const T1 v1, const T2 v2) const {
+					return !(less_than(v1, v2)
+							|| less_than(v2, v1));
+				}
+
+				/*
+				 * Searches for a given value starting at the root. Assumes root is not NULL. Returns founded node or last
+				 * visited(!) leaf. Hence, returned node can or cannot contain value---depending if value is stored in tree
+				 * or not.
+				 *
+				 * Complexity: O(log(n)) with n being the current number of values contained in the tree.
+				 */
+				template<class KT>
+				avlnode * findNode(const KT key) const {
+					assert(root != NULL);
+
+					const avlnode * node = static_cast<avlnode *>(root);
+
+					while(true) {
+						if(equals(key, node->value)) {
+							break;
+						}
+
+						if(less_than(key, node->value)) {
+							if(node->child[0] == NULL) {
+								break;
+							} else {
+								node = static_cast<avlnode *>(node->child[0]);
+								continue;
+							}
+						}
+
+						assert(less_than(node->value, key));
+						if(node->child[1] == NULL) {
+							break;
+						} else {
+							node = static_cast<avlnode *>(node->child[1]);
+							continue;
+						}
+					}
+
+					return const_cast<avlnode *>(node);
+				}
+
+				/*
+				 * Template function to cover search by value and search by key. Searches for a given value starting at the root.
+				 * Returns value if present. Otherwise, an AvltreeException is thrown.
+				 *
+				 * Complexity: O(log(n)) with n being the current number of values contained in the tree.
+				 */
+				template<class KT>
+				inline T findInternal(const KT key) const throw(AvltreeException) {
+					if(root != NULL) {
+						const avlnode * const node = findNode(key);
+						assert(node != NULL);
+
+						if(equals(key, node->value)) {
+							return node->value;
+						}
+					}
+
+					throw AvltreeException();
+				}
 
 				/*
 				 * Removes a given node from the tree, deletes the allocated node memory, and returns the value contained in the node.
@@ -729,6 +784,8 @@ namespace datastructures {
 					// set children to NULL -> otherwise, "delete node" recursively deletes children nodes
 					node->child[0] = NULL;
 					node->child[1] = NULL;
+					node->prev->next = node->next;
+					node->next->prev = node->prev;
 					delete node;
 
 					if(currentSize < UINT_MAX) {
@@ -761,24 +818,29 @@ namespace datastructures {
 
 					throw AvltreeException();
 				}
+			///
+			/// \endcond
+			///
 
 			public:
-				avltree() : root(NULL), currentSize(0) { /* empty */ }
-				~avltree() {
-					if(root != NULL)
-						delete root;
-				}
-
-				// TODO: remove (only for debugging)
-				const avlnode * const getRoot() const throw() {
+				///
+				/// \cond
+				/// TODO: remove (only for debugging)
+				///
+				const _avlbasenode * const getRoot() const throw() {
 					return root;
 				}
+				///
+				/// \endcond
+				///
 
-				/*
-				 * Inserts a new value into the tree. If value is already present, tree is not altered and false is returned.
-				 * If value is not present, it is inserted (including possible re-balancing of the tree) and true is returned.
+				/**
+				 * \brief Inserts a new value into the tree.
 				 *
-				 * In case of memory allocation error, tree is not altered and and bad_alloc exception is thrown.
+				 * If value is already present, tree is not altered and `false` is returned. If value is not present, it is inserted
+				 * (including possible re-balancing of the tree) and `true` is returned.
+				 *
+				 * In case of memory allocation error, tree is not altered and and `bad_alloc` exception is thrown.
 				 *
 				 * Complexity: O(log(n)) with n being the current number of values contained in the tree.
 				 */
@@ -795,7 +857,18 @@ namespace datastructures {
 						const int index = !less_than(value, node->value); // value < node->value => index = 0; index = 1, otherwise
 						assert(node->child[index] == NULL);
 
-						node->child[index] = new avlnode(value, node);
+						_avlbasenode * before;
+						_avlbasenode * after;
+						if(index == 0) { // new node is inserted "before" parent node
+							before = node->prev;
+							after = node;
+						} else { // new node is inserted "after" parent node
+							assert(index == 1);
+							before = node;
+							after = node->next;
+						}
+
+						node->child[index] = new avlnode(value, before, after, node);
 						if(node->child[index] == NULL) {
 							throw std::bad_alloc();
 						}
@@ -805,7 +878,7 @@ namespace datastructures {
 						assert(currentSize == 0);
 
 						// else: empty tree; create new root
-						root = new avlnode(value);
+						root = new avlnode(value, &beforeFirst, &afterLast, NULL);
 						if(root == NULL) {
 							throw std::bad_alloc();
 						}
@@ -818,8 +891,10 @@ namespace datastructures {
 					return true;
 				}
 
-				/*
-				 * Searches for a value in the tree by value. Returns a copy of the value if present; otherwise an AvltreeException is thrown.
+				/**
+				 * \brief Searches for an element in the tree by value.
+				 *
+				 * Returns a copy of the value if present; otherwise an AvltreeException is thrown.
 				 *
 				 * Complexity: O(log(n)) with n being the current number of values contained in the tree.
 				 */
@@ -827,8 +902,10 @@ namespace datastructures {
 					return findInternal(value);
 				}
 
-				/*
-				 * Searches for a value in the tree by key. Returns a copy of the value if present; otherwise an AvltreeException is thrown.
+				/**
+				 * \brief Searches for an element in the tree by key.
+				 *
+				 * Returns a copy of the value if present; otherwise an AvltreeException is thrown.
 				 * By default (ie, if no key type template parameter is specified), findByKey() is the same as find().
 				 *
 				 * Complexity: O(log(n)) with n being the current number of values contained in the tree.
@@ -837,213 +914,108 @@ namespace datastructures {
 					return findInternal(key);
 				}
 
-				/*
-				 * Removes a value from the tree. Returns a copy of the removed value if present; otherwise an AvltreeException is thrown.
+				/**
+				 * \brief Removes an element from the tree.
+				 *
+				 * Returns a copy of the removed element value if present; otherwise an AvltreeException is thrown.
 				 *
 				 * Complexity: O(log(n)) with n being the current number of values contained in the tree.
 				 */
-				T remove(const T value) throw(AvltreeException) {
+				T erase(const T value) throw(AvltreeException) {
 					return removeInternal(value);
 				}
 
-				/*
-				 * Removes a value from the tree by given key. Returns a copy of the removed value if present; otherwise an AvltreeException is thrown.
+				/**
+				 * \brief Removes an element from the tree by given key.
+				 *
+				 * Returns a copy of the removed element value if present; otherwise an AvltreeException is thrown.
 				 *
 				 * Complexity: O(log(n)) with n being the current number of values contained in the tree.
 				 */
-				T removeByKey(const K key) throw(AvltreeException) {
+				T eraseByKey(const K key) throw(AvltreeException) {
 					return removeInternal(key);
 				}
 
-				/*
-				 * Removes all values from the tree.
-				 */
-				void clear() throw() {
-					if(root != NULL) {
-						delete root;
-						root = NULL;
-						currentSize = 0;
-					}
-				}
-
-				/*
-				 * Returns true if the avltree is empty, ie, does not contain any elements. Otherwise, false is returned.
-				 */
-				bool empty() const throw() {
-					return root == NULL;
-				}
-
-				/*
-				 * Returns the current number of values contained in the tree. The count is only correct, if the tree always contained less than UINT_MAX values.
-				 * If UINT_MAX or more values have been contained in the tree, size() returns UINT_MAX (even if the current number of values is less than UINT_MAX).
-				 * The count is automatically corrected, if the tree gets empty. If this case, the count is set to zero. The count can be recomputed using
-				 * recomputeSize().
+				/**
+				 * \brief Returns the value of the smallest element stored in the tree.
 				 *
-				 * Complexity: O(1)
-				 */
-				size_t size() const throw() {
-					return currentSize;
-				}
-
-				/*
-				 * Recomputes the number of values contained in the tree and return the count. If more than UINT_MAX values are contained, UINT_MAX in returned.
+				 * If tree in empty, an AvltreeException is thrown.
 				 *
-				 * Complexity: O(n) with n being the current number of values contained in the tree.
-				 */
-				// TODO: introduce treeDepth -> use to chance recomputing if depth is too large, s.th. size must be smaller than UINT_MAX
-				// TODO: introduce count for each node that contains #elements for the subtree
-				size_t recomputeSize() throw() {
-					size_t newSize = 0;
-
-					if(root != NULL) {
-						const avlnode * node = root;
-						const avlnode * lastVisited = NULL;
-						++newSize;
-
-						while(node != NULL) {
-							if(lastVisited == node->parent) {
-								lastVisited = node;
-								if(node->child[0] != NULL) {
-									node = node->child[0];
-									++newSize;
-								} else if(node->child[1] != NULL) {
-									node = node->child[1];
-									++newSize;
-								} else {
-									node = node->parent;
-								}
-							} else if(lastVisited == node->child[0]) {
-								lastVisited = node;
-								if(node->child[1] != NULL) {
-									node = node->child[1];
-									++newSize;
-								} else {
-									node = node->parent;
-								}
-							} else {
-								assert(lastVisited == node->child[1]);
-								lastVisited = node;
-								node = node->parent;
-							}
-						}
-					}
-
-					currentSize = newSize;
-					return currentSize;
-				}
-
-				/*
-				 * Returns the smallest values stored in the tree. If tree in empty, an AvltreeException is thrown.
-				 *
-				 * Complexity: O(log(n)) with n being the current number of values contained in the tree.
+				 * Complexity: O(log(n)) with n being the current number of elements contained in the tree.
 				 */
 				const T & front() const throw(AvltreeException) {
-					const avlnode * const min = findLimitAncestor(root, 0);
+					const _avlbasenode * const min = beforeFirst.next;
 
-					if(min != NULL) {
-						return min->value;
+					if(min != &afterLast) {
+						return static_cast<const avlnode * const>(min)->value;
 					}
 
 					throw AvltreeException();
 				}
 
-				/*
-				 * Removes the smallest values stored in the tree and returns it. If tree in empty, an AvltreeException is thrown.
+				/**
+				 * \brief Removes the smallest element stored in the tree and returns its value.
 				 *
-				 * Complexity: O(log(n)) with n being the current number of values contained in the tree.
+				 * If tree in empty, an AvltreeException is thrown.
+				 *
+				 * Complexity: O(log(n)) with n being the current number of elements contained in the tree.
 				 */
 				T pop() throw(AvltreeException) {
-					avlnode * const min = findLimitAncestor(root, 0);
+					_avlbasenode * const min = beforeFirst.next;
 
-					if(min != NULL) {
-						return removeNodeInternal(min);
+					if(min != &afterLast) {
+						return removeNodeInternal(static_cast<avlnode * const>(min));
 					}
 
 					throw AvltreeException();
 				}
 
-				/*
-				 * Returns the largest values stored in the tree. If tree in empty, an AvltreeException is thrown.
+				/**
+				 * \brief Returns the value of the largest elements stored in the tree.
 				 *
-				 * Complexity: O(log(n)) with n being the current number of values contained in the tree.
+				 * If tree in empty, an AvltreeException is thrown.
+				 *
+				 * Complexity: O(log(n)) with n being the current number of elements contained in the tree.
 				 */
-				T back() const throw(AvltreeException) {
-					const avlnode * const max = findLimitAncestor(root, 1);
+				const T & back() const throw(AvltreeException) {
+					const _avlbasenode * const max = afterLast.prev;
 
-					if(max != NULL) {
-						return max->value;
+					if(max != &beforeFirst) {
+						return static_cast<const avlnode * const>(max)->value;
 					}
 
 					throw AvltreeException();
 				}
 
-				/*
-				 * TODO
-				 */
-				const_iterator cbefore_begin() const throw() {
-					return root != NULL ? const_iterator(root, true) : const_iterator();
-				}
-
-				/*
-				 * TODO
+				/**
+				 * \brief Returns a bi-directional read-only (const) iterator that points to the first (smallest) element in the tree.
 				 */
 				const_iterator cbegin() const throw() {
-					const avlnode * min = findLimitAncestor(root, 0);
-
-					return min != NULL ? const_iterator(min) : const_iterator();
+					return beforeFirst.next != &afterLast ? const_iterator(beforeFirst.next) : const_iterator(&emptyTreeNode);
 				}
 
-				/*
-				 * TODO
+				/**
+				 * \brief Returns a bi-directional read-only (const) iterator that points to the first (smallest) element in the tree.
+				 */
+				iterator begin() const throw() {
+					return cbegin();
+				}
+
+				/**
+				 * \brief Returns a bi-directional read-only (const) iterator that points to the position after the last largest) element in the tree.
 				 */
 				const_iterator cend() const throw() {
-					const avlnode * max = findLimitAncestor(root, 1);
-
-					return max != NULL ? const_iterator(max) : const_iterator();
+					return afterLast.prev != &beforeFirst ? const_iterator(&afterLast) : const_iterator(&emptyTreeNode);
 				}
 
-				/*
-				 * TODO
+				/**
+				 * \brief Returns a bi-directional read-only (const) iterator that points to the position after the last largest) element in the tree.
 				 */
-				const_iterator cafter_end() const throw() {
-					return root != NULL ? const_iterator(root, false) : const_iterator();
-				}
-
-				/*
-				 * TODO
-				 */
-				const_iterator crbegin() const throw() {
-					assert(false);
-
-					return NULL;
-				}
-
-				/*
-				 * TODO
-				 */
-				const_iterator crend() const throw() {
-					assert(false);
-
-					return NULL;
+				iterator end() const throw() {
+					return cend();
 				}
 
 		};
-
-		/*
-		 * TODO
-		 */
-		template<typename T>
-		inline bool operator==(const _avltree_const_iterator<T> & it1, const _avltree_const_iterator<T> & it2) {
-			return it1.node == it2.node;
-		}
-
-		/*
-		 * TODO
-		 */
-		template<typename T>
-		inline bool operator!=(const _avltree_const_iterator<T> & it1, const _avltree_const_iterator<T> & it2) {
-			return it1.node != it2.node;
-		}
 
 	}
 }
