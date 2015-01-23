@@ -63,21 +63,19 @@ namespace datastructures {
 			/*
 			 * Creates a dummy base node. Used as before-first, after-last, and as empty node in iterators in case of empty tree.
 			 */
-			_avlbasenode() : parent(NULL), balanceFactor(0) {
+			_avlbasenode() : parent(NULL), prev(this), next(this), balanceFactor(0) {
 				child[0] = NULL;
 				child[1] = NULL;
-				prev = this;
-				next = this;
 			}
 			/*
 			 * Creates a new node given its parent in the tree and links the new node in between two other nodes. Nodes are always created as leafs,
 			 * thus, children are always NULL.
 			 */
-			_avlbasenode(_avlbasenode* p, _avlbasenode* before, _avlbasenode* after) : parent(p), prev(before), next(after), balanceFactor(0) {
+			_avlbasenode(_avlbasenode* p, _avlbasenode& before, _avlbasenode& after) : parent(p), prev(&before), next(&after), balanceFactor(0) {
 				child[0] = NULL;
 				child[1] = NULL;
-				before->next = this;
-				after->prev = this;
+				before.next = this;
+				after.prev = this;
 			}
 			/*
 			 * Frees memory of child nodes if present. Thus, all nodes of the complete subtree will automatically be freed by recursive destructor calls.
@@ -101,14 +99,20 @@ namespace datastructures {
 		struct _avlnode : _avlbasenode {
 			const T value;
 
-			_avlnode(const T& v, _avlbasenode* before, _avlbasenode* after, _avlnode<T>* p) throw() : _avlbasenode(p, before, after), value(v) { /* empty */}
+			/*
+			 * Creates a new node for value v, given its parent in the tree and links the new node in between two other nodes.
+			 * Nodes are always created as leafs, thus, children are always NULL.
+			 */
+			_avlnode(const T& v, _avlbasenode& before, _avlbasenode& after, _avlbasenode* p) throw() : _avlbasenode(p, before, after), value(v) { /* empty */}
 		};
 		///
 		/// \endcond
 		///
 
 
+
 		template<class T, class C = std::less<T>, class K = T> class avltree;
+
 		/**
 		 * \brief Iterator for @ref avltree.
 		 *
@@ -162,7 +166,8 @@ namespace datastructures {
 				 * Furthermore, it must not be called if the iterator was retrieved from an empty tree.
 				 */
 				reference operator*() const {
-					return dynamic_cast<const avlnode* const>(node)->value;
+					assert(dynamic_cast<const avlnode* const>(node) != NULL);
+					return static_cast<const avlnode* const>(node)->value;
 				}
 
 				/**
@@ -172,7 +177,8 @@ namespace datastructures {
 				 * Furthermore, it must not be called if the iterator was retrieved from an empty tree.
 				 */
 				pointer operator->() const {
-					return &dynamic_cast<const avlnode* const>(node)->value;
+					assert(dynamic_cast<const avlnode* const>(node) != NULL);
+					return &static_cast<const avlnode* const>(node)->value;
 				}
 
 				/**
@@ -290,13 +296,12 @@ namespace datastructures {
 				///
 				/*
 				 * Computes the child index of node with regard to its parent. Return 0 if node is left child of its parent and 1 if
-				 * node is right child of its parent (or parent is root). Assumes node is not NULL.
+				 * node is right child of its parent (or parent is root).
 				 *
 				 * Complexity: O(1)
 				 */
-				inline int _getIndex(const _avlbasenode* const node) throw() {
-					assert(node != NULL);
-					const _avlbasenode* const parent = node->parent;
+				inline int _getIndex(const _avlbasenode& node) throw() {
+					const _avlbasenode* const parent = node.parent;
 					// -> parent might be root: in this case, index has no useful value because there is not parent
 					//		(left hand side of || for computing index; ensures that right hand side is not evaluated if parent==NULL
 					//		 to avoid null pointer access; returned index=1)
@@ -306,7 +311,7 @@ namespace datastructures {
 					//		(right hand side of || for computing index:
 					//		 -> parent->child[1] == node evaluates to true => index=1
 					//		 -> parent->child[1] == node evaluates to false => index=0)
-					return parent == NULL || parent->child[1] == node;
+					return parent == NULL || parent->child[1] == &node;
 				}
 
 				/*
@@ -334,150 +339,147 @@ namespace datastructures {
 				/*
 				 * Moves given node one level upwards the tree. Parent is move one level downwards. Index indicates if shifting has to be
 				 * done from left to right (index==0) or from right to left (index==1). Potential left or right sub-tree of node becomes
-				 * right or left sub-tree of parent. Assumes that node is not NULL and that node has a parent.
+				 * right or left sub-tree of parent. Assumes that node has a parent.
 				 *
 				 * Complexity: O(1)
 				 */
-				inline void rotateSimple(_avlbasenode* const node, const int index) throw() {
-					assert(node != NULL);
-					assert(node->parent != NULL);
+				inline void rotateSimple(_avlbasenode& node, const int index) throw() {
+					// sanity check: if not true, rotating does not make sense
+					assert(node.child[index] != NULL);
+
 					assert(index == 0 || index == 1);
-
-					// sanity check: it not true, rotating does not make sense
-					assert(node->child[index] != NULL);
-
-					_avlbasenode* const parent = node->parent;
+					assert(node.parent != NULL);
+					_avlbasenode& parent = *node.parent;
 
 					// sanity check for input balance factors: computation of new balance factors is based on this assumptions
-					assert(node->balanceFactor != 0 || (index==0 && parent->balanceFactor==-1) || (index==1 && parent->balanceFactor==1));
+					assert(node.balanceFactor != 0 || (index==0 && parent.balanceFactor==-1) || (index==1 && parent.balanceFactor==1));
 
 
 
 					// rotate node up (ie, replace parent by node)
-					replaceChildBySubtree(parent->parent, _getIndex(parent), node);
+					replaceChildBySubtree(parent.parent, _getIndex(parent), &node);
 
 					// move sub-tree of node to be parent's sub-tree
-					// -> index==0 => node->right becomes parent->left
-					// -> index==1 => node->left becomes parent->right
-					replaceChildBySubtree(parent, index, node->child[1-index]);
+					// -> index==0 => node.right becomes parent.left
+					// -> index==1 => node.left becomes parent.right
+					replaceChildBySubtree(&parent, index, node.child[1-index]);
 
 					// rotate parent down (below node)
 					// -> index==0 => rotate from left to right => parent becomes right child of node
 					// -> index==1 => rotate from right to left => parent becomes left child of node
-					replaceChildBySubtree(node, 1-index, parent);
+					replaceChildBySubtree(&node, 1-index, &parent);
 
 
 
 					// correct balance factors
 
 					// there are 6 different cases: [(1) summarizes 4 cases]
-					//   1) node->balanceFactor != 0
+					//   1) node.balanceFactor != 0
 					//		in this cases, we have a left-left or right-right situation
 					//		(possible after insert in left/right side of node or remove in right/left side of parent)
 					//      -> after rotating, node and parent are in balance (nbf = pbf = 0)
 					//
-					//   2) node->balanceFactor == 0 && index == 0
+					//   2) node.balanceFactor == 0 && index == 0
 					//      in this cases, we have a remove situation on the right hand side of parent
 					//      -> after rotating, parent keeps it balance factor but node's right hand side increases by one (nbf = 1)
 					//
-					//   3) node->balanceFactor == 0 && index == 1
+					//   3) node.balanceFactor == 0 && index == 1
 					//      symmetric to case (2)
 					//      -> balance factor but node's right hand side decreases by one (nbf = -1)
 					//
 					// we unify all cases as follows:
 					//   because case (2) and (3) are remove cases, it holds that:
-					//     index==0 => parent->balanceFactor==-1
-					//     index==1 => parent->balanceFactor==1
-					//   hence, the new balance factor of node is "parent->balanceFactor * -1"
+					//     index==0 => parent.balanceFactor==-1
+					//     index==1 => parent.balanceFactor==1
+					//   hence, the new balance factor of node is "parent.balanceFactor * -1"
 					//
 					// in case (1) "(1 - nbf*nbf)==0"; thus, both balance factors are set to zero
-					// in case (2) and (3) "(1 - nbf*nbf)==1"; thus, parent->balance factor is not altered and node->balanceFactor is inverted
+					// in case (2) and (3) "(1 - nbf*nbf)==1"; thus, parent.balance factor is not altered and node.balanceFactor is inverted
 
-					const int nbf = node->balanceFactor;
-					const int pbf_new = (1 - nbf*nbf) * parent->balanceFactor;
+					const int nbf = node.balanceFactor;
+					const int pbf_new = (1 - nbf*nbf) * parent.balanceFactor;
 
 					// note that after rotation, node is on top of parent
-					node->balanceFactor = -pbf_new;
-					parent->balanceFactor = pbf_new;
+					node.balanceFactor = -pbf_new;
+					parent.balanceFactor = pbf_new;
 				}
 
 				/*
 				 * Moves child of given node two level upward (above node), and moves node's parent one level down (become child of
 				 * node's child that was moved up). Index indicates if shifting of child hat to be done left-right (index==0) or
-				 * right-left (index==1). Potential sub-trees of child become sub-trees of node and parent. Assume node is not NULL,
-				 * node has a parent, and left or right child (index==1 or index==0, respectively) of node is present.
+				 * right-left (index==1). Potential sub-trees of child become sub-trees of node and parent. Assume that
+				 * node has a parent and that either the left or right child (index==1 or index==0, respectively) of node is present.
 				 *
 				 * Complexity: O(1)
 				 */
-				inline void rotateDouble(_avlbasenode* const node, const int index) throw() {
-					assert(node != NULL);
-					assert(node->parent != NULL);
-					assert(node->child[1-index] != NULL);
+				inline void rotateDouble(_avlbasenode& node, const int index) throw() {
 					assert(index == 0 || index == 1);
 
-					_avlbasenode* const parent = node->parent;
-					_avlbasenode* const child = node->child[1-index];
+					assert(node.parent != NULL);
+					_avlbasenode& parent = *node.parent;
+					assert(node.child[1-index] != NULL);
+					_avlbasenode& child = *node.child[1-index];
 
 					// double-rotate child up (ie, replace parent by child)
-					replaceChildBySubtree(parent->parent, _getIndex(parent), child);
+					replaceChildBySubtree(parent.parent, _getIndex(parent), &child);
 
 					// first sub-tree of child is moved below node
 					// -> index==0 => left sub-tree of child becomes right sub-tree of node
 					// -> index==1 => right sub-tree of child becomes left sub-tree of node
-					replaceChildBySubtree(node, 1-index, child->child[index]);
+					replaceChildBySubtree(&node, 1-index, child.child[index]);
 
 					// move node below child
 					// -> index==0 => node becomes left child of child
 					// -> index==1 => node becomes right child of child
-					replaceChildBySubtree(child, index, node);
+					replaceChildBySubtree(&child, index, &node);
 
 					// second sub-tree of child is moved below parent
 					// -> index==0 => right sub-tree of child becomes left sub-tree of parent
 					// -> index==1 => left sub-tree of child becomes right sub-tree of parent
-					replaceChildBySubtree(parent, index, child->child[1-index]);
+					replaceChildBySubtree(&parent, index, child.child[1-index]);
 
 					// move parent below child
 					// -> index==0 => parent becomes right child of child
 					// -> index==1 => parent becomes left child of child
-					replaceChildBySubtree(child, 1-index, parent);
+					replaceChildBySubtree(&child, 1-index, &parent);
 
 
 
 					// correct balance factors
 
 					// there are three cases:
-					//   1) child->balanceFactor == 0
+					//   1) child.balanceFactor == 0
 					//      in this case, both subtrees of child and the outer subtrees of node and parent are equally deep
 					//      -> after rotation, all balance factors are zero
-					//   2) child->balanceFactor == 1
+					//   2) child.balanceFactor == 1
 					//      in this case, the left subtree of child is less deep (by one) as the right subtree (which is equally deep as the outer subtrees of node and parent)
 					//      -> after rotation, the short left subtree is below (right side) of the left child of the new top node
 					//      -> balance factor of left child of the new top node is 1
-					//   3) child->balanceFactor == -1
+					//   3) child.balanceFactor == -1
 					//		symmetric to case (2)
 					//      -> balance factor of right child of the new top node is -1
 					//
 					// we unify all cases as follows:
-					//   child->balanceFactor==1 OR child->balanceFactor==-1
+					//   child.balanceFactor==1 OR child.balanceFactor==-1
 					//      => childSqaure==1 (does not alter right factor)
-					//   child->balanceFactor==1
-					//		=> newLeft = "(child->balanceFactor + 1) / -2 == -1
+					//   child.balanceFactor==1
+					//		=> newLeft = "(child.balanceFactor + 1) / -2 == -1
 					//      => newRight = newLeft + 1 = 0
-					//   child->balanceFactor==-1
-					//      => "(child->balanceFactor + 1) / -2 == 0
+					//   child.balanceFactor==-1
+					//      => "(child.balanceFactor + 1) / -2 == 0
 					//      => newRight = newLeft + 1 = 1
-					//   child->balanceFactor==0
+					//   child.balanceFactor==0
 					//     => childSqaure==0 (ensures the right hand side is invalidated)
 					//     => instead of adding 1, 0 is added to compute new right hand side balance factor
 
-					const int cbf = child->balanceFactor;
+					const int cbf = child.balanceFactor;
 					const int childSqaure = cbf * cbf;
 					const int balanceLeftChild = childSqaure * ((cbf+1)/-2);
 
 					// note that after rotation, child is on top of node and parent
-					child->child[0]->balanceFactor = balanceLeftChild;
-					child->child[1]->balanceFactor = balanceLeftChild + childSqaure;
-					child->balanceFactor = 0; // child is always in balance
+					child.child[0]->balanceFactor = balanceLeftChild;
+					child.child[1]->balanceFactor = balanceLeftChild + childSqaure;
+					child.balanceFactor = 0; // child is always in balance
 				}
 
 				/*
@@ -516,8 +518,8 @@ namespace datastructures {
 						}
 
 						if(bf == 2*heightChange) { // tree is not in balance -> need to rotate
-							_avlbasenode * const child = node->child[rotate];
-							if(child->balanceFactor == -heightChange) {
+							_avlbasenode& child = *node->child[rotate];
+							if(child.balanceFactor == -heightChange) {
 								// more difficult case: rotation at two different levels is necessary (including split of child subtree)
 								// starting point: [parent is on top]
 								//   child <- node <- parent (left-right in-balance)
@@ -537,7 +539,7 @@ namespace datastructures {
 								// or
 								//   parent <- node -> child
 								//   (left sub-tree of node becomes right sub-tree of parent)
-								assert(child->balanceFactor == 0 || child->balanceFactor == heightChange);
+								assert(child.balanceFactor == 0 || child.balanceFactor == heightChange);
 								rotateSimple(child, rotate);
 							}
 							node = node->parent;
@@ -553,7 +555,8 @@ namespace datastructures {
 						}
 
 						// step to parent
-						index = _getIndex(node);
+						assert(node != NULL);
+						index = _getIndex(*node);
 						node = node->parent;
 					}
 
@@ -567,43 +570,42 @@ namespace datastructures {
 				 *
 				 * Complexity: O(log(n)) with n being the current number of values contained in the tree.
 				 */
-				void removeNode(const _avlbasenode* const node) throw() {
-					assert(node != NULL);
-
+				void removeNode(const _avlbasenode& node) throw() {
 					int index = _getIndex(node);
 					_avlbasenode* largestAncestor;
 
-					if(node->child[0] != NULL) {
-						largestAncestor = node->child[0];
+					if(node.child[0] != NULL) {
+						largestAncestor = node.child[0];
 						while(largestAncestor->child[1] != NULL) {
 							largestAncestor = largestAncestor->child[1];
 						}
 
-						_avlbasenode* const p_ancestor = largestAncestor->parent;
+						assert(largestAncestor->parent != NULL);
+						_avlbasenode& p_ancestor = *largestAncestor->parent;
 
 						// remove largest child from subtree
 						int heightDifferenz = 0;
-						if(p_ancestor != node) { // regular case
+						if(&p_ancestor != &node) { // regular case
 							// replace ancestor by its left sub-tree (in order to remove ancestor from tree)
-							replaceChildBySubtree(p_ancestor, 1, largestAncestor->child[0]);
+							replaceChildBySubtree(&p_ancestor, 1, largestAncestor->child[0]);
 
 							// check for special case, in which left hand child (of node that is remove) has a single right leaf-child
 							// in this case, replaceChildBySubtree(...), decreased subtree height by one
-							heightDifferenz = p_ancestor == node->child[0] && p_ancestor->child[0] == NULL;
+							heightDifferenz = &p_ancestor == node.child[0] && p_ancestor.child[0] == NULL;
 
 							// balance subtree upward to the node that is removed
-							heightDifferenz += balanceSubtree(node, p_ancestor, 1, 1);
+							heightDifferenz += balanceSubtree(&node, &p_ancestor, 1, 1);
 						} else { // ancestor is direct child of node
 							// replace ancestor by its left sub-tree
-							replaceChildBySubtree(p_ancestor, 0, largestAncestor->child[0]);
+							replaceChildBySubtree(&p_ancestor, 0, largestAncestor->child[0]);
 							heightDifferenz = 1;
 						}
 
 						// use largest ancestor to replace node to be removed
-						replaceChildBySubtree(largestAncestor, 0, node->child[0]);
-						replaceChildBySubtree(largestAncestor, 1, node->child[1]);
-						replaceChildBySubtree(node->parent, index, largestAncestor);
-						largestAncestor->balanceFactor = node->balanceFactor;
+						replaceChildBySubtree(largestAncestor, 0, node.child[0]);
+						replaceChildBySubtree(largestAncestor, 1, node.child[1]);
+						replaceChildBySubtree(node.parent, index, largestAncestor);
+						largestAncestor->balanceFactor = node.balanceFactor;
 
 						if(heightDifferenz == 0)
 							return;
@@ -611,10 +613,10 @@ namespace datastructures {
 						index = 0; // lower tree is left child (prepare for balanceSubtree(...))
 					} else { // node has no left subtree or left subtree is exactly one node
 						// replace node by subtree
-						replaceChildBySubtree(node->parent, index, node->child[1]);
+						replaceChildBySubtree(node.parent, index, node.child[1]);
 
 						// start re-balancing upper tree above node, because node is not present any longer
-						largestAncestor = node->parent;
+						largestAncestor = node.parent;
 					}
 
 					// balance tree upward to root starting at removed node (ie, its replacement or its parent)
@@ -736,8 +738,8 @@ namespace datastructures {
 							|| less_than(v2, v1));
 				}
 
-				inline avlnode* createNewNode(const T& value, _avlbasenode* before, _avlbasenode* after, avlnode* const node) const throw(std::bad_alloc) {
-					avlnode* newNode =new avlnode(value, before, after, node);
+				inline avlnode* createNewNode(const T& value, _avlbasenode& before, _avlbasenode& after, avlnode* const parent) const throw(std::bad_alloc) {
+					avlnode* newNode = new avlnode(value, before, after, parent);
 					if(newNode == NULL) {
 						throw std::bad_alloc();
 					}
@@ -752,11 +754,11 @@ namespace datastructures {
 				 * Complexity: O(log(n)) with n being the current number of values contained in the tree.
 				 */
 				template<class KT>
-				avlnode* findNode(const KT& key) const {
+				avlnode& findNode(const KT& key) const {
 					assert(root != NULL);
 
-					const avlnode* node = dynamic_cast<avlnode*>(root);
-					assert(node != NULL);
+					assert(dynamic_cast<avlnode*>(root) != NULL);
+					const avlnode* node = static_cast<avlnode*>(root);
 
 					while(true) {
 						if(equals(key, node->value)) {
@@ -767,8 +769,8 @@ namespace datastructures {
 							if(node->child[0] == NULL) {
 								break;
 							} else {
-								node = dynamic_cast<avlnode*>(node->child[0]);
-								assert(node != NULL);
+								assert(dynamic_cast<avlnode*>(node->child[0]) != NULL);
+								node = static_cast<avlnode*>(node->child[0]);
 								continue;
 							}
 						}
@@ -777,13 +779,13 @@ namespace datastructures {
 						if(node->child[1] == NULL) {
 							break;
 						} else {
-							node = dynamic_cast<avlnode*>(node->child[1]);
-							assert(node != NULL);
+							assert(dynamic_cast<avlnode*>(node->child[1]) != NULL);
+							node = static_cast<avlnode*>(node->child[1]);
 							continue;
 						}
 					}
 
-					return const_cast<avlnode*>(node);
+					return *const_cast<avlnode*>(node);
 				}
 
 				/*
@@ -795,11 +797,10 @@ namespace datastructures {
 				template<class KT>
 				inline T findInternal(const KT& key) const throw(AvltreeException) {
 					if(root != NULL) {
-						const avlnode* const node = findNode(key);
-						assert(node != NULL);
+						const avlnode& node = findNode(key);
 
-						if(equals(key, node->value)) {
-							return node->value;
+						if(equals(key, node.value)) {
+							return node.value;
 						}
 					}
 
@@ -809,16 +810,16 @@ namespace datastructures {
 				/*
 				 * Removes a given node from the tree, deletes the allocated node memory, and returns the value contained in the node.
 				 */
-				T removeNodeInternal(avlnode* const node) throw() {
+				T removeNodeInternal(avlnode& node) throw() {
 					removeNode(node);
 
-					const T value = node->value;
+					const T value = node.value;
 					// set children to NULL -> otherwise, "delete node" recursively deletes children nodes
-					node->child[0] = NULL;
-					node->child[1] = NULL;
-					node->prev->next = node->next;
-					node->next->prev = node->prev;
-					delete node;
+					node.child[0] = NULL;
+					node.child[1] = NULL;
+					node.prev->next = node.next;
+					node.next->prev = node.prev;
+					delete &node;
 
 					if(currentSize < UINT_MAX) {
 						assert(currentSize > 0);
@@ -840,10 +841,9 @@ namespace datastructures {
 				template<class KT>
 				size_type removeInternal(const KT& value) {
 					if(root != NULL) {
-						avlnode* const node = findNode(value);
-						assert(node != NULL);
+						avlnode& node = findNode(value);
 
-						if(equals(value, node->value)) {
+						if(equals(value, node.value)) {
 							removeNodeInternal(node);
 							return 1;
 						}
@@ -860,7 +860,7 @@ namespace datastructures {
 				/// \cond
 				/// TODO: remove (only for debugging)
 				///
-				const _avlbasenode* const getRoot() const throw() {
+				const _avlbasenode* getRoot() const throw() {
 					return root;
 				}
 				///
@@ -931,36 +931,37 @@ namespace datastructures {
 					avlnode* newNode;
 
 					if(root != NULL) {
-						avlnode* const node = findNode(value);
-						assert(node != NULL);
+						avlnode& node = findNode(value);
 
-						if(equals(value, node->value)) { // duplicate found; returned leaf contains value
-							return std::pair<iterator,bool>(const_iterator(node),false);
+						if(equals(value, node.value)) { // duplicate found; returned leaf contains value
+							return std::pair<iterator,bool>(const_iterator(&node),false);
 						}
 
 						// we insert below returned leaf
-						const int index = !less_than(value, node->value); // value < node->value => index = 0; index = 1, otherwise
-						assert(node->child[index] == NULL);
+						const int index = !less_than(value, node.value); // value < node->value => index = 0; index = 1, otherwise
+						assert(node.child[index] == NULL);
 
 						_avlbasenode* before;
 						_avlbasenode* after;
 						if(index == 0) { // new node is inserted "before" parent node
-							before = node->prev;
-							after = node;
+							before = node.prev;
+							after = &node;
 						} else { // new node is inserted "after" parent node
 							assert(index == 1);
-							before = node;
-							after = node->next;
+							before = &node;
+							after = node.next;
 						}
 
-						newNode = createNewNode(value, before, after, node);
-						node->child[index] = newNode;
-						balanceSubtree(NULL, node, index, 0);
+						assert(before != NULL);
+						assert(after != NULL);
+						newNode = createNewNode(value, *before, *after, &node);
+						node.child[index] = newNode;
+						balanceSubtree(NULL, &node, index, 0);
 					} else {
 						assert(currentSize == 0);
 
 						// else: empty tree; create new root
-						newNode = createNewNode(value, &beforeFirst, &afterLast, NULL);
+						newNode = createNewNode(value, beforeFirst, afterLast, NULL);
 						root = newNode;
 					}
 
@@ -971,7 +972,7 @@ namespace datastructures {
 					return std::pair<iterator,bool>(const_iterator(newNode),true);
 				}
 
-				std::pair<iterator,bool> insert(iterator it) throw(std::bad_alloc) {
+				std::pair<iterator,bool> insert(iterator& it) throw(std::bad_alloc) {
 					return insert(*it);
 				}
 				// TODO: by emplace constructibe from i to j (both iterator
@@ -991,7 +992,7 @@ namespace datastructures {
 
 				// TODO -> we can (and do) ignore p
 				// does it make sense, because we do not return a pair???
-				iterator emplace_hint(const_iterator p, int args) { // <- fix argument list [std::forward<Args>(args)...]
+				iterator emplace_hint(const_iterator& p, int args) { // <- fix argument list [std::forward<Args>(args)...]
 					return emplace(args).first();
 				}
 				/**
@@ -1055,19 +1056,19 @@ namespace datastructures {
 				 *
 				 * Complexity: O(log(n)) with n being the current number of values contained in the tree.
 				 */
-				size_type erase(const T value) throw() {
+				size_type erase(const T& value) throw() {
 					return removeInternal(value);
 				}
 
 				// TODO
-				iterator erase(iterator it) throw() {
+				iterator erase(iterator& it) throw() {
 					iterator rit = it++;
 					removeNodeInternal(it);
 					return rit;
 				}
 
 				// TODO
-				iterator erase(iterator i, iterator j) throw() { // from, to(exclusive)
+				iterator erase(iterator& i, iterator& j) throw() { // from, to(exclusive)
 
 					return j;
 				}
@@ -1080,7 +1081,7 @@ namespace datastructures {
 				 * Complexity: O(log(n)) with n being the current number of values contained in the tree.
 				 */
 				// TODO: remove exception -> see erase
-				T eraseByKey(const K key) throw(AvltreeException) {
+				T eraseByKey(const K& key) throw(AvltreeException) {
 					return removeInternal(key);
 				}
 
@@ -1091,11 +1092,13 @@ namespace datastructures {
 				 *
 				 * Complexity: O(log(n)) with n being the current number of elements contained in the tree.
 				 */
-				const T & front() const throw(AvltreeException) {
-					const _avlbasenode * const min = beforeFirst.next;
+				const T& front() const throw(AvltreeException) {
+					assert(beforeFirst.next != NULL);
+					const _avlbasenode& min = *beforeFirst.next;
 
-					if(min != &afterLast) {
-						return dynamic_cast<const avlnode * const>(min)->value;
+					if(&min != &afterLast) {
+						assert(dynamic_cast<const avlnode* const>(&min) != NULL);
+						return static_cast<const avlnode&>(min).value;
 					}
 
 					throw AvltreeException();
@@ -1110,10 +1113,12 @@ namespace datastructures {
 				 */
 				// TODO -> should it be pop_front()? -> pop_front may not throw exception
 				T pop() throw(AvltreeException) {
-					_avlbasenode * const min = beforeFirst.next;
+					assert(beforeFirst.next != NULL);
+					_avlbasenode& min = *beforeFirst.next;
 
-					if(min != &afterLast) {
-						return removeNodeInternal(dynamic_cast<avlnode * const>(min));
+					if(&min != &afterLast) {
+						assert(dynamic_cast<avlnode* const>(&min) != NULL);
+						return removeNodeInternal(static_cast<avlnode&>(min));
 					}
 
 					throw AvltreeException();
@@ -1127,11 +1132,13 @@ namespace datastructures {
 				 * Complexity: O(log(n)) with n being the current number of elements contained in the tree.
 				 */
 				// TODO -> should it be pop_back()? -> pop_back may not throw exception
-				const T & back() const throw(AvltreeException) {
-					const _avlbasenode * const max = afterLast.prev;
+				const T& back() const throw(AvltreeException) {
+					assert(afterLast.prev != NULL);
+					const _avlbasenode& max = *afterLast.prev;
 
-					if(max != &beforeFirst) {
-						return dynamic_cast<const avlnode * const>(max)->value;
+					if(&max != &beforeFirst) {
+						assert(dynamic_cast<const avlnode* const>(&max) != NULL);
+						return static_cast<const avlnode&>(max).value;
 					}
 
 					throw AvltreeException();
@@ -1142,7 +1149,6 @@ namespace datastructures {
 				 */
 				// TODO: verify: semantics should be "const_cast<T const&>(avltree).begin();"
 				const_iterator cbegin() const throw() {
-					//return beforeFirst.next != &afterLast ? const_iterator(beforeFirst.next) : const_iterator(&emptyTreeNode);
 					return beforeFirst.next != &afterLast ? const_iterator(beforeFirst.next) : const_iterator(&afterLast);
 				}
 
@@ -1160,7 +1166,6 @@ namespace datastructures {
 				 */
 				// TODO: verify: semantics should be "const_cast<T const&>(avltree).end();"
 				const_iterator cend() const throw() {
-					//return afterLast.prev != &beforeFirst ? const_iterator(&afterLast) : const_iterator(&emptyTreeNode);
 					return const_iterator(&afterLast);
 				}
 
