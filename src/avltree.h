@@ -22,7 +22,9 @@
 #include <stddef.h>
 #include <limits.h>
 #include <exception>
-#include <cassert>
+#include <assert.h>
+#include <functional>
+#include <iterator>
 
 /**
  * \brief The top-level namespace of the whole project
@@ -1063,7 +1065,8 @@ namespace datastructures {
 				// TODO
 				iterator erase(iterator& it) throw() {
 					iterator rit = it++;
-					removeNodeInternal(it);
+					assert(dynamic_cast<avlnode*>(const_cast<_avlbasenode*>(it.node)) != NULL);
+					removeNodeInternal(*static_cast<avlnode*>(const_cast<_avlbasenode*>(it.node)));
 					return rit;
 				}
 
